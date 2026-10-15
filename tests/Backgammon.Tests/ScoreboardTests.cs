@@ -1,7 +1,7 @@
-using GameTemplate.Core;
+using Backgammon.Core;
 using Xunit;
 
-namespace GameTemplate.Tests;
+namespace Backgammon.Tests;
 
 public class ScoreboardTests
 {
