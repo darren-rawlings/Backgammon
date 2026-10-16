@@ -64,6 +64,16 @@ public class BackgammonTests
 		Assert.Equal(167, game.Pips(true));
 	}
 
+	[Fact]
+	public void EveryOrderOfATurnIsOffered()
+	{
+		var game = new BackgammonGame();
+		game.Roll(5, 2);
+		var steps = game.PlayableSteps();
+		Assert.Contains(steps, s => s.From == 13 && s.To == 11);
+		Assert.Contains(steps, s => s.From == 13 && s.To == 8);
+	}
+
 	private static bool? PlayOut(ComputerPlayer white, ComputerPlayer black, int seed)
 	{
 		var game = new BackgammonGame();

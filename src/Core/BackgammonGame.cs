@@ -211,7 +211,48 @@ public sealed class BackgammonGame
 	/// <summary>The steps playable next, as part of some legal full turn.</summary>
 	public List<Step> PlayableSteps()
 	{
-		return LegalTurns().Where(t => t.Count > 0).Select(t => t[0]).Distinct().ToList();
+		// Checked step by step rather than from LegalTurns, whose de-duplication keeps only one
+		// order of moves that reach the same position (13/11 then 13/8 hides 13/11 as a first step).
+		if (IsOver || Dice.Count == 0)
+			return new List<Step>();
+		var candidates = new List<(Step Step, int Use)>();
+		foreach (int die in Dice.Distinct())
+		{
+			foreach (var step in SingleSteps(die))
+			{
+				var next = Clone();
+				next.ApplyStep(step);
+				candidates.Add((step, 1 + next.MaxUse()));
+			}
+		}
+		if (candidates.Count == 0)
+			return new List<Step>();
+		int most = candidates.Max(c => c.Use);
+		var playable = candidates.Where(c => c.Use == most).Select(c => c.Step).ToList();
+		// When only one die can be used, it must be the larger one if that's possible.
+		if (most == 1 && Dice.Count == 2 && Dice[0] != Dice[1] && playable.Any(s => s.Die == Dice.Max()))
+			playable = playable.Where(s => s.Die == Dice.Max()).ToList();
+		return playable.Distinct().ToList();
+	}
+
+	/// <summary>The most dice that can still be used from here.</summary>
+	private int MaxUse()
+	{
+		if (IsOver || Dice.Count == 0)
+			return 0;
+		int best = 0;
+		foreach (int die in Dice.Distinct())
+		{
+			foreach (var step in SingleSteps(die))
+			{
+				var next = Clone();
+				next.ApplyStep(step);
+				best = Math.Max(best, 1 + next.MaxUse());
+				if (best == Dice.Count)
+					return best;
+			}
+		}
+		return best;
 	}
 
 	/// <summary>Plays one step of the turn (it must start a legal full turn).</summary>
