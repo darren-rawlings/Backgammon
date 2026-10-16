@@ -66,6 +66,25 @@ public sealed class BackgammonGame
 
 	private void Set(int point, int count) => _points[point] = count;
 
+	/// <summary>
+	/// Sets up a position (for tutorial clips and tests): checkers by White's point numbers,
+	/// positive for White and negative for Black, plus any on the bars or borne off.
+	/// </summary>
+	public void Load(IReadOnlyDictionary<int, int> points, bool whiteToMove, int whiteOff = 0, int blackOff = 0, int whiteBar = 0, int blackBar = 0)
+	{
+		Array.Clear(_points);
+		foreach (var (point, count) in points)
+			_points[point] = count;
+		_bar[0] = whiteBar;
+		_bar[1] = blackBar;
+		_off[0] = whiteOff;
+		_off[1] = blackOff;
+		WhiteToMove = whiteToMove;
+		Dice.Clear();
+		IsOver = false;
+		_history.Clear();
+	}
+
 	/// <summary>Checkers on a point as seen from White: positive White, negative Black.</summary>
 	public int PointCount(int whitePoint) => _points[whitePoint];
 

@@ -8,6 +8,19 @@ namespace Backgammon.Tests;
 public class BackgammonTests
 {
 	[Fact]
+	public void BearingOffTheLastCheckersWinsAGammonWhenTheOtherSideHasNoneOff()
+	{
+		var game = new BackgammonGame();
+		game.Load(new System.Collections.Generic.Dictionary<int, int> { [1] = 1, [2] = 1, [20] = -15 }, whiteToMove: true, whiteOff: 13);
+		game.Roll(2, 1);
+		while (!game.IsOver && game.PlayableSteps().Count > 0)
+			game.Play(game.PlayableSteps()[0]);
+		Assert.True(game.IsOver);
+		Assert.True(game.WhiteWon);
+		Assert.Equal(2, game.Points);
+	}
+
+	[Fact]
 	public void StartsWithFifteenEachAndEqualPips()
 	{
 		var game = new BackgammonGame();

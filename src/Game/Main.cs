@@ -64,6 +64,7 @@ public partial class Main : Node3D
 
 	private bool _demo;
 	private bool _quitAfterDemo;
+	private string? _clip;
 	private float _initialSpin;
 
 	private bool VsComputer => _settings.Mode == GameMode.PlayerVsComputer || _demo;
@@ -106,15 +107,11 @@ public partial class Main : Node3D
 		AddChild(_hud);
 		_hud.Build(new HudOptions(Title, "Roll, tap a checker, then where to go",
 			PiecesLabel: "Checkers", PieceName: s => $"{Styles.Pieces(s).NameOne} & {Styles.Pieces(s).NameTwo}"),
-			_settings.Muted, _settings.Mode, _settings.Difficulty, _settings.Board, _settings.Pieces);
+			_settings);
 		_hud.NewGamePressed += OnNewGamePressed;
 		_hud.UndoPressed += OnUndoPressed;
-		_hud.MuteToggled += muted =>
-		{
-			_settings.Muted = muted;
-			AudioServer.SetBusMute(0, muted);
-			_settings.Save();
-		};
+		_hud.RestartPressed += OnRestartPressed;
+		_hud.SetTutorial(Tutorial.Pages);
 		_hud.ModeChosen += (mode, difficulty) =>
 		{
 			_settings.Mode = mode;
@@ -136,28 +133,22 @@ public partial class Main : Node3D
 			RebuildCheckers();
 		};
 
-		var layer = new CanvasLayer();
-		AddChild(layer);
-		_roll = new Button { Text = "Roll", FocusMode = Control.FocusModeEnum.None, Visible = false };
-		_roll.AddThemeFontSizeOverride("font_size", 32);
-		foreach (var state in new[] { "normal", "hover", "pressed", "hover_pressed" })
-		{
-			var box = new StyleBoxFlat { BgColor = state.StartsWith("pressed") ? theme.Accent.Darkened(0.2f) : theme.Accent, AntiAliasing = true };
-			box.SetCornerRadiusAll(32);
-			box.SetContentMarginAll(12);
-			_roll.AddThemeStyleboxOverride(state, box);
-		}
-		_roll.SetAnchorsPreset(Control.LayoutPreset.CenterBottom);
-		_roll.OffsetLeft = -130;
-		_roll.OffsetRight = 130;
-		_roll.OffsetTop = -192;
-		_roll.OffsetBottom = -128;
+		_roll = _hud.AddButton("Roll", true, Control.LayoutPreset.CenterBottom, -130, 130, -192, -128, 32);
+		_roll.Visible = false;
 		_roll.Pressed += () => _ = Roll();
-		layer.AddChild(_roll);
 
-		_spin = new SpinControl(_rig, () => !_busy);
+		_spin = new SpinControl(_rig, () => !_busy && !_settings.FreezeBoard);
 		_spin.Tapped += OnTapped;
+		if (_clip != null)
+		{
+			_hud.Visible = false;
+			_ = PlayClip(_clip);
+			return;
+		}
 		StartGame();
+		if (!_demo)
+			_hud.OfferTutorialOnce(_settings);
+		_hud.ApplyDevFlags();
 	}
 
 	// ---------------------------------------------------------------- Board
@@ -304,14 +295,15 @@ public partial class Main : Node3D
 
 	// ---------------------------------------------------------------- Dice
 
-	private async Task Roll()
+	/// <summary>Rolls both dice (or, for tutorial clips, the given numbers).</summary>
+	private async Task Roll(int? fixedA = null, int? fixedB = null)
 	{
 		if (_busy || _rolled || _game.IsOver)
 			return;
 		_busy = true;
 		_roll.Visible = false;
 		_hud.HideHint();
-		int a = _dice.Next(1, 7), b = _dice.Next(1, 7);
+		int a = fixedA ?? _dice.Next(1, 7), b = fixedB ?? _dice.Next(1, 7);
 		_game.Roll(a, b);
 		_rolled = true;
 		DevLog.Write($"{(_game.WhiteToMove ? "White" : "Black")} rolls {a}-{b}");
@@ -505,6 +497,7 @@ public partial class Main : Node3D
 				_scoreWhite += _game.Points;
 			else
 				_scoreBlack += _game.Points;
+			await SetWinnerAlight(_game.WhiteWon == true);
 		}
 		await Wait(0.3f);
 		RefreshUi();
@@ -520,7 +513,7 @@ public partial class Main : Node3D
 	{
 		float dt = (float)delta;
 		_spin.Process(dt);
-		if (_busy || !IsComputerTurn || _game.IsOver)
+		if (_busy || !IsComputerTurn || _game.IsOver || _clip != null)
 			return;
 		if (!_rolled)
 		{
@@ -582,6 +575,7 @@ public partial class Main : Node3D
 	private void StartGame()
 	{
 		_computer.Cancel();
+		PutOutFire();
 		_pendingTurn = null;
 		_game.Reset();
 		_rolled = false;
@@ -591,6 +585,110 @@ public partial class Main : Node3D
 			die.Visible = false;
 		RebuildCheckers();
 		RefreshUi();
+	}
+
+	private void OnRestartPressed()
+	{
+		if (_busy)
+			return;
+		if (_game.IsOver || _game.TurnsMade == 0)
+		{
+			StartGame();
+			return;
+		}
+		_hud.AskRestart(VsComputer && !_demo, countLoss =>
+		{
+			// Resigning concedes a single game's point.
+			if (countLoss)
+				_scoreBlack += 1;
+			StartGame();
+		}, then => _ads.ShowRewarded(rewarded: then, closed: () => { }));
+	}
+
+	// ---------------------------------------------------------------- The winner's fire
+
+	private readonly List<Flames> _fires = new();
+
+	/// <summary>
+	/// The winner's borne-off checkers catch fire in the tray, from the last one in back along the
+	/// row. They stand close together, so every third one carries the flames: the whole tray burns.
+	/// </summary>
+	private async Task SetWinnerAlight(bool white)
+	{
+		var tray = Stack(white ? WhiteOff : BlackOff);
+		for (int i = tray.Count - 1, lit = 0; i >= 0; i--, lit++)
+		{
+			var checker = tray[i];
+			bool flames = lit % 3 == 0;
+			_fires.Add(Flames.SetAlight(_rig, checker.Position + new Vector3(0, 0.1f, 0), checker.GetChildren().OfType<MeshInstance3D>(),
+				radius: 0.34f, size: 1.2f, withLight: lit == 0, particles: flames));
+			await Wait(0.05f);
+		}
+	}
+
+	private void PutOutFire()
+	{
+		foreach (var fire in _fires)
+			fire.Extinguish();
+		_fires.Clear();
+		foreach (var stack in _stacks.Values)
+		{
+			foreach (var checker in stack)
+			{
+				foreach (var mesh in checker.GetChildren().OfType<MeshInstance3D>())
+					mesh.MaterialOverlay = null;
+			}
+		}
+	}
+
+	// ---------------------------------------------------------------- Tutorial clips
+
+	/// <summary>
+	/// Plays one scripted scene for the tutorial (with --clip=name; Record-Clips.ps1 records it),
+	/// then quits. The HUD is hidden so the clip shows only the board.
+	/// </summary>
+	private async Task PlayClip(string clip)
+	{
+		// The clip is square: pull back so the trays (where the fire is) stay in view.
+		_camera.Fov = 66;
+		_camera.LookAt(new Vector3(0, -0.4f, 1.1f));
+		_settings.Mode = GameMode.PlayerVsPlayer;
+		_settings.Muted = false;
+		_game.Reset();
+		switch (clip)
+		{
+			case "hit":
+				// A black checker left alone on White's 4 point: White's 4 lands on it.
+				_game.Load(new Dictionary<int, int> { [24] = 2, [13] = 5, [8] = 3, [6] = 5, [1] = -1, [4] = -1, [12] = -5, [17] = -3, [19] = -5 }, whiteToMove: true);
+				break;
+			case "bearoff":
+				_game.Load(new Dictionary<int, int> { [1] = 1, [2] = 1, [19] = -5, [20] = -5, [22] = -5 }, whiteToMove: true, whiteOff: 13);
+				break;
+		}
+		RebuildCheckers();
+		RefreshUi();
+		await Wait(0.8f);
+		var (a, b, moves) = clip switch
+		{
+			"hit" => (4, 2, new[] { (8, 4), (6, 4) }),
+			"bearoff" => (2, 1, new[] { (2, 0), (1, 0) }),
+			_ => (3, 1, new[] { (8, 5), (6, 5) }),
+		};
+		await Roll(a, b);
+		await Wait(0.5f);
+		foreach (var (from, to) in moves)
+		{
+			var step = _game.PlayableSteps().FirstOrDefault(s => s.From == from && s.To == to);
+			if (step == default)
+				break;
+			_selected = from;
+			ShowGlows();
+			await Wait(0.9f);
+			await PlayStep(step);
+			await Wait(0.5f);
+		}
+		await Wait(clip == "bearoff" ? 2.6f : 1.2f);
+		GetTree().Quit();
 	}
 
 	private bool CanUndo => VsComputer && !_demo && !_busy && _game.TurnsMade > 0 && (_game.IsOver || _game.WhiteToMove == HumanIsWhite);
@@ -608,6 +706,7 @@ public partial class Main : Node3D
 	private void UndoTurn()
 	{
 		_computer.Cancel();
+		PutOutFire();
 		_pendingTurn = null;
 		if (_game.IsOver && _counted)
 		{
@@ -676,6 +775,7 @@ public partial class Main : Node3D
 		_hud.SetScore($"{NameOf(true)}  {_scoreWhite}   —   {_scoreBlack}  {NameOf(false)}   ·   pips {_game.Pips(true)}–{_game.Pips(false)}");
 		_hud.SetNewGameVisible(_game.IsOver && !_busy);
 		_hud.SetUndoVisible(CanUndo);
+		_hud.SetRestartVisible(!_game.IsOver);
 		_roll.Visible = !_busy && !_rolled && !_game.IsOver && !IsComputerTurn;
 		ShowGlows();
 		if (_game.IsOver)
@@ -733,6 +833,9 @@ public partial class Main : Node3D
 					break;
 				case "--spin":
 					_initialSpin = Mathf.DegToRad(float.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
+					break;
+				case "--clip":
+					_clip = value;
 					break;
 			}
 		}
